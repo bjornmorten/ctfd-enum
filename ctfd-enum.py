@@ -136,6 +136,7 @@ def preserve_cookies(session: requests.Session):
 
 
 def fetch_nonce(session: requests.Session, base_url: str) -> str | None:
+    # TODO: check if is CTFd instance?
     url = base_url.rstrip("/") + "/register"
     try:
         r = session.get(url)
