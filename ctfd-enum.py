@@ -14,7 +14,7 @@
 ctfd-enum: Enumeration tool for CTFd.
 
 Usage:
-    ./ctfd-enum.py config.yaml
+    ./ctfd-enum.py
 
 License:
     MIT License (c) 2025 bjornmorten
