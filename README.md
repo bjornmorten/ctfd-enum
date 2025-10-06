@@ -5,16 +5,6 @@ Enumerate and bruteforce [CTFd](https://ctfd.io) registrations and logins.
 > [!WARNING]
 > The project is under development.
 
-## Usage
-
-```sh
-./ctfd-enum.py <command> [OPTIONS] TARGET
-
-# Get help
-./ctfd-enum.py --help
-./ctfd-enum.py <command> --help
-```
-
 ## Commands
 
 ### `register`
