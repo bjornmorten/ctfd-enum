@@ -44,7 +44,7 @@ Bruteforce CTFd login with provided usernames and passwords.
 #### Usage
 
 ```sh
-./ctfd-enum.py register [OPTIONS] TARGET
+./ctfd-enum.py login [OPTIONS] TARGET
 ```
 
 #### Options
