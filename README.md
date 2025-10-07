@@ -21,7 +21,6 @@ Enumerate CTFd registration (existing users, emails, whitelisted domains, regist
 
 | Flag                 | Arg    | Description                           |
 |----------------------|:------:|---------------------------------------|
-| `-r`, `--rotate-ips` | -      | Enable IP rotation using AWS gateways |
 | `-u`, `--usernames`  | `FILE` | Wordlist of usernames                 |
 | `-e`, `--emails`     | `FILE` | Wordlist of emails                    |
 | `-d`, `--domains`    | `FILE` | Wordlist of whitelisted domains       |
@@ -51,7 +50,6 @@ Bruteforce CTFd login with provided usernames and passwords.
 
 | Flag                 | Arg    | Description                           |
 |----------------------|:------:|---------------------------------------|
-| `-r`, `--rotate-ips` | -      | Enable IP rotation using AWS gateways |
 | `-u`, `--username`   | `TEXT` | Single username or email              |
 | `-U`, `--usernames`  | `FILE` | Wordlist of usernames or emails       |
 | `-p`, `--password`   | `TEXT` | Single password                       |

