@@ -9,7 +9,7 @@ Enumerate and bruteforce [CTFd](https://ctfd.io) registrations and logins.
 
 ### `register`
 
-Enumerate CTFd registration (existing users, emails, whitelisted domains, registration codes).
+Enumerate CTFd registration (registered users, emails, whitelisted domains, registration codes).
 
 #### Usage
 
