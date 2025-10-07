@@ -22,25 +22,24 @@ License:
 """
 
 import copy
+import threading
 import time
+import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from itertools import chain, zip_longest
-from typing import NamedTuple, Optional, Callable, Any, TypeVar, List
 from pathlib import Path
-from typing import NamedTuple, Optional
-from tqdm.rich import tqdm
-from colorama import Fore, Style
+from queue import Empty, Queue
+from threading import Barrier
+from typing import Any, Callable, NamedTuple, Optional, TypeVar
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-import threading
 import requests
 import typer
 from bs4 import BeautifulSoup
 from rich.console import Console
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
-import warnings
+from rich.table import Table
 from tqdm import TqdmExperimentalWarning
+from tqdm.rich import tqdm
 
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 
@@ -49,12 +48,15 @@ app = typer.Typer(add_completion=False)
 console_lock = threading.Lock()
 T = TypeVar("T")
 
+found_results = []
+
 
 # -------------------------
 # Constants
 # -------------------------
 
 USER_AGENT = "ctfd-enum/0.1 (+https://github.com/bjornmorten/ctfd-enum)"
+DEFAULT_THREADS = 75
 
 ERROR_PATTERNS: dict[str, tuple[str, bool]] = {
     "username": ("That user name is already taken", True),
@@ -279,28 +281,53 @@ def attempt_login(
     return valid
 
 
+def report_found(kind: str, value: str):
+    tqdm.write(f"Found {kind}: {value}")
+    found_results.append((kind, value))
+
+
 def print_register_result(
     attempt: RegistrationAttempt, result: dict[str, bool]
 ) -> None:
-    if attempt.username and result["username"]:
-        console.print(f"[green]Found existing username:[/] {attempt.username}")
-    if attempt.email and result["email"]:
-        console.print(f"[green]Found existing email:[/] {attempt.email}")
-    if attempt.email_domain and result["email_domain"]:
-        console.print(
-            f"[green]Found whitelisted email domain:[/] {attempt.email_domain}"
-        )
-    if attempt.registration_code and result["registration_code"]:
-        console.print(
-            f"[green]Found valid registration code:[/] {attempt.registration_code}"
-        )
+    if attempt.username and result.get("username"):
+        report_found("registered username", attempt.username)
+    if attempt.email and result.get("email"):
+        report_found("registered email", attempt.email)
+    if attempt.email_domain and result.get("email_domain"):
+        report_found("whitelisted domain", attempt.email_domain)
+    if attempt.registration_code and result.get("registration_code"):
+        report_found("valid registration code", attempt.registration_code)
+
+
+def print_login_result(pair: list[str, str], result: bool) -> None:
+    if result:
+        report_found("credentials", f"{pair[0]}:{pair[1]}")
+
+
+def print_summary(sort_by: str = "type", reverse: bool = False):
+    if not found_results:
+        console.print("[bold yellow]No findings[/]")
+        return
+
+    key_idx = 0 if sort_by == "type" else 1
+    sorted_results = sorted(found_results, key=lambda x: x[key_idx], reverse=reverse)
+
+    table = Table(
+        title=f"Findings summary (sorted by {sort_by}{' desc' if reverse else ''})"
+    )
+    table.add_column("Type", style="cyan", justify="left")
+    table.add_column("Value", style="magenta", justify="left")
+
+    for kind, val in sorted_results:
+        table.add_row(kind, val)
+
+    console.print(table)
 
 
 # -------------------------
 # Enumeration orchestration
 # -------------------------
 
-from threading import Barrier
 
 rate_limited = False
 
@@ -327,9 +354,6 @@ def safe_worker(
     except Exception as e:
         print(e)
         return item, e, time.time()
-
-
-from queue import Queue, Empty
 
 
 def run_enumeration(
@@ -366,7 +390,7 @@ def run_enumeration(
 
             barrier = Barrier(min(threads, len(batch)))
 
-            time.sleep(5.25 - (time.time() - last_request_time))
+            time.sleep(5 - (time.time() - last_request_time))
             rate_limited = False
 
             futures = [
@@ -388,10 +412,7 @@ def run_enumeration(
 
             pbar.update(suc)
 
-            print(
-                f"Batch finished ({len(batch)})",
-                f"{suc=}, {err=} (total: {suc + err})",
-            )
+    print_summary()
 
 
 # -------------------------
@@ -446,8 +467,7 @@ def enumerate_login(
                 pass
 
     def printer(pair: tuple[str, str], result: bool):
-        if result:
-            tqdm.write(f"Valid: {pair[0]}:{pair[1]}")
+        print_login_result(pair, result)
 
     run_enumeration(combos, worker, printer, threads=threads)
 
@@ -461,7 +481,7 @@ def register(
         ..., help="Base URL of the CTFd instance (e.g. https://demo.ctfd.io)"
     ),
     threads: int = typer.Option(
-        20,
+        DEFAULT_THREADS,
         "-t",
         "--threads",
         help="Number of threads",
@@ -536,7 +556,9 @@ def register(
         )
         raise typer.Exit(code=2)
 
-    console.print(f"[bold cyan]Starting registration enumeration against {target}[/]")
+    console.print(
+        f"[bold cyan]Starting registration enumeration against {target} with {threads} threads[/]"
+    )
 
     enumerate_register(
         target, usernames_list, valid_emails, valid_domains, codes_list, threads
@@ -551,7 +573,7 @@ def login(
         )
     ),
     threads: int = typer.Option(
-        20,
+        DEFAULT_THREADS,
         "-t",
         "--threads",
         help="Number of threads",
@@ -605,7 +627,9 @@ def login(
     usernames_list = [username] if username else load_wordlist(usernames)
     passwords_list = [password] if password else load_wordlist(passwords)
 
-    console.print(f"[bold cyan]Starting login enumeration against {target}[/]")
+    console.print(
+        f"[bold cyan]Starting login enumeration against {target} with {threads} threads[/]"
+    )
 
     enumerate_login(target, usernames_list, passwords_list, threads)
 
