@@ -954,7 +954,6 @@ def run_enumeration(
 
             pbar.update(suc)
 
-            # Mark when this batch completed
             last_batch_end_time = time.time()
 
         tqdm.write("")
@@ -1037,7 +1036,6 @@ def enumerate_register(
 
     run_enumeration(attempts, worker, printer, threads=threads, collector=collector)
 
-    # Close shared session
     session.close()
     return collector
 
@@ -1092,7 +1090,6 @@ def enumerate_login(
         skip_checker=skip_checker,
     )
 
-    # Close shared session
     session.close()
     return collector
 
