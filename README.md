@@ -2,9 +2,6 @@
 
 Enumerate and bruteforce [CTFd](https://ctfd.io) registrations and logins.
 
-> [!WARNING]
-> The project is under development.
-
 ## Commands
 
 ### `register`
@@ -19,12 +16,14 @@ Enumerate CTFd registration (registered users, emails, whitelisted domains, regi
 
 #### Options
 
-| Flag                 | Arg    | Description                           |
-|----------------------|:------:|---------------------------------------|
-| `-u`, `--usernames`  | `FILE` | Wordlist of usernames                 |
-| `-e`, `--emails`     | `FILE` | Wordlist of emails                    |
-| `-d`, `--domains`    | `FILE` | Wordlist of whitelisted domains       |
-| `-c`, `--codes`      | `FILE` | Wordlist of registration codes        |
+| Flag                 | Arg    | Description                                 |
+|----------------------|:------:|---------------------------------------------|
+| `-u`, `--usernames`  | `FILE` | Wordlist of usernames                       |
+| `-e`, `--emails`     | `FILE` | Wordlist of emails                          |
+| `-d`, `--domains`    | `FILE` | Wordlist of whitelisted domains             |
+| `-c`, `--codes`      | `FILE` | Wordlist of registration codes              |
+| `-t`, `--threads`    | `NUM`  | Number of concurrent threads (default: 150) |
+| `-k`, `--insecure`   | -      | Ignore invalid SSL certificates             |
 
 #### Examples
 
@@ -48,12 +47,14 @@ Bruteforce CTFd login with provided usernames and passwords.
 
 #### Options
 
-| Flag                 | Arg    | Description                           |
-|----------------------|:------:|---------------------------------------|
-| `-u`, `--username`   | `TEXT` | Single username or email              |
-| `-U`, `--usernames`  | `FILE` | Wordlist of usernames or emails       |
-| `-p`, `--password`   | `TEXT` | Single password                       |
-| `-P`, `--passwords`  | `FILE` | Wordlist of passwords                 |
+| Flag                 | Arg    | Description                                 |
+|----------------------|:------:|---------------------------------------------|
+| `-u`, `--username`   | `TEXT` | Single username or email                    |
+| `-U`, `--usernames`  | `FILE` | Wordlist of usernames or emails             |
+| `-p`, `--password`   | `TEXT` | Single password                             |
+| `-P`, `--passwords`  | `FILE` | Wordlist of passwords                       |
+| `-t`, `--threads`    | `NUM`  | Number of concurrent threads (default: 150) |
+| `-k`, `--insecure`   | -      | Ignore invalid SSL certificates             |
 
 #### Examples
 
