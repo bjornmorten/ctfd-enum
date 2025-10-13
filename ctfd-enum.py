@@ -4,7 +4,6 @@
 # dependencies = [
 #   "typer",
 #   "rich",
-#   "colorama",
 #   "tqdm",
 #   "beautifulsoup4",
 #   "requests",
