@@ -11,7 +11,7 @@ Enumerate CTFd registration (registered users, emails, whitelisted domains, regi
 #### Usage
 
 ```sh
-./ctfd-enum.py register [OPTIONS] TARGET
+ctfd-enum register [OPTIONS] TARGET
 ```
 
 #### Options
@@ -29,10 +29,10 @@ Enumerate CTFd registration (registered users, emails, whitelisted domains, regi
 
 ```sh
 # Enumerate existing usernames
-./ctfd-enum.py register -u usernames.txt https://ctf.example.com
+ctfd-enum register -u usernames.txt https://ctf.example.com
 
 # Enumerate existing emails and registration code
-./ctfd-enum.py register -e emails.txt -c codes.txt https://ctf.example.com
+ctfd-enum register -e emails.txt -c codes.txt https://ctf.example.com
 ```
 
 ### `login`
@@ -42,7 +42,7 @@ Bruteforce CTFd login with provided usernames and passwords.
 #### Usage
 
 ```sh
-./ctfd-enum.py login [OPTIONS] TARGET
+ctfd-enum login [OPTIONS] TARGET
 ```
 
 #### Options
@@ -60,10 +60,10 @@ Bruteforce CTFd login with provided usernames and passwords.
 
 ```sh
 # Single username + password list
-./ctfd-enum.py login -u alice -P passwords.txt https://ctf.example.com
+ctfd-enum login -u alice -P passwords.txt https://ctf.example.com
 
 # Username and password lists
-./ctfd-enum.py login -U users.txt -P passwords.txt https://ctf.example.com
+ctfd-enum login -U users.txt -P passwords.txt https://ctf.example.com
 ```
 
 ## Disclaimer
